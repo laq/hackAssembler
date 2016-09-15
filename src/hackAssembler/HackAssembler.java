@@ -4,13 +4,9 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.FileReader;
 import java.io.IOException;
-import java.io.PipedReader;
-import java.io.PipedWriter;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-
-import bufferedPipe.BufferedPipe;
 
 //TODO: change use of buffered pipe to a string queue.
 
@@ -31,11 +27,11 @@ public class HackAssembler {
 			FileReader fr = new FileReader(filePath);
 			BufferedReader br = new BufferedReader(fr);
 			String destFile = filePath.replaceFirst(".asm", ".hack");
-			BufferedWriter fw = Files.newBufferedWriter(Paths.get(destFile));
+			BufferedWriter bw = Files.newBufferedWriter(Paths.get(destFile));
 			HackAssembler asm = new HackAssembler();
-			asm.assemble(br, fw);
+			asm.assemble(br, bw);
 			fr.close();
-			fw.close();
+			bw.close();
 		} catch (IOException e) {
 			endAssembler("File " + filePath + " could not be opened");
 		}
@@ -53,68 +49,71 @@ public class HackAssembler {
 	 * @throws IOException
 	 */
 	public void assemble(BufferedReader originBuffReader, BufferedWriter destinyBuffWriter) throws IOException {
-		BufferedPipe labelSymbolPipe = new BufferedPipe();
-		BufferedPipe symbolParserPipe = new BufferedPipe();
+		InMemoryCode code = new InMemoryCode();
+		code.readNewFromFile(originBuffReader);
+		code.new2Current();
 
-		parseLabels(originBuffReader, labelSymbolPipe.getBufferedWriter());
-		translateSymbols(labelSymbolPipe.getBufferedReader(), symbolParserPipe.getBufferedWriter());
+		System.out.println("READ:" + code);
 
-		System.out.println(symbolProcessor.symbolTableToString());
+		parseLabels(code);
+		System.out.println("Cleaned-LabelFree:" + code);
 
-		parseFile(symbolParserPipe.getBufferedReader());
-		compileProgram(destinyBuffWriter);
+		translateSymbols(code);
+		System.out.println("Translated:" + code);
+		// System.out.println("SymbolTable:"+symbolProcessor.symbolTableToString());
+
+		parseFile(code);
+		compileProgram(code);
+		
+		code.new2Current();
+		code.writeCurrent2File(destinyBuffWriter);
+		
 	}
 
-	private void translateSymbols(BufferedReader br, BufferedWriter bw) throws IOException {
-		while (br.ready()) {
-			String ln = br.readLine();
+	private void translateSymbols(InMemoryCode code) throws IOException {
+		while (!code.currentIsEmpty()) {
+			String ln = code.getLineFromCurrent();
 			// System.out.println(ln);
+			String ln2Write = ln;
 			if (SymbolProcessor.isSymbol(ln)) {
 				String translatedLn = symbolProcessor.processSymbol(ln);
-				bw.write(translatedLn);
-				bw.newLine();
-			} else {
-				bw.write(ln);
-				bw.newLine();
+				ln2Write = translatedLn;
 			}
+			code.addLine2New(ln2Write);
 		}
-		bw.close();
 	}
 
-	private void parseLabels(BufferedReader br, BufferedWriter bw) throws IOException {
+	private void parseLabels(InMemoryCode code) throws IOException {
 		int currentLine = -1;// Counting of lines starts from 0 and there is no
 								// valid line yet
-		while (br.ready()) {
-			String ln = br.readLine();
+		while (!code.currentIsEmpty()) {
+			String ln = code.getLineFromCurrent();
 			ln = cleanLine(ln);
 			if (ln != null) {
 				if (symbolProcessor.isLabel(ln)) {
 					symbolProcessor.processLabel(ln, currentLine);
 				} else {
-					bw.write(ln);
-					bw.newLine();
+					code.addLine2New(ln);
 					currentLine++;
 				}
 			}
 		}
-		bw.close();
 	}
 
-	private void parseFile(BufferedReader br) throws IOException {
-		while (br.ready()) {
-			String ln = br.readLine();
+	private void parseFile(InMemoryCode code) throws IOException {
+		while (!code.currentIsEmpty()) {
+			String ln = code.getLineFromCurrent();
 			// System.out.println(ln);
 			parseLine(ln);
 		}
 	}
 
-	private void compileProgram(BufferedWriter fw) throws IOException {
+	private void compileProgram(InMemoryCode code) throws IOException {
 		for (Instruction inst : program) {
 			String binLine = inst.compile();
 			// add line to file
 			System.out.println(binLine);
-			fw.write(binLine);
-			fw.newLine();
+			code.addLine2New(binLine);
 		}
 	}
 
@@ -131,12 +130,12 @@ public class HackAssembler {
 	}
 
 	private String cleanLine(String ln) {
-		ln = ln.trim();
 		int commentIndex = ln.indexOf(commentStarter);
 		if (commentIndex >= 0) { // Instruction has a comment
 			// Remove comment
 			ln = ln.substring(0, commentIndex);
 		}
+		ln = ln.trim();
 		// Ignore empty line
 		if (ln.length() == 0) {
 			return null;
